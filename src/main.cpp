@@ -3,6 +3,7 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/EditorUI.hpp>
 #include <Geode/utils/web.hpp>
+#include <Geode/utils/async.hpp>
 #include <matjson.hpp>
 
 using namespace geode::prelude;
@@ -11,6 +12,14 @@ namespace {
     std::string memKey(LevelEditorLayer* lel) {
         auto* lvl = lel->m_level;
         return fmt::format("mem_{}_{}", lvl->m_levelID.value(), std::string(lvl->m_levelName));
+    }
+
+    std::vector<matjson::Value> toVec(matjson::Value const& v) {
+        std::vector<matjson::Value> out;
+        if (auto r = v.asArray()) {
+            for (auto const& x : *r) out.push_back(x);
+        }
+        return out;
     }
 
     matjson::Value loadMemory(std::string const& key) {
@@ -22,7 +31,7 @@ namespace {
 
     void saveMemory(std::string const& key, matjson::Value mem) {
         int keep = (int)Mod::get()->getSettingValue<int64_t>("memory-turns") * 2;
-        auto arr = mem.asArray().unwrapOr(std::vector<matjson::Value>{});
+        auto arr = toVec(mem);
         while ((int)arr.size() > keep) arr.erase(arr.begin());
         matjson::Value out = matjson::Value::array();
         for (auto& v : arr) out.push(v);
@@ -67,14 +76,15 @@ unless the user asks otherwise, and never add triggers unless the user asks for 
 Respect the style and the earlier requests remembered for this level.)";
 }
 
-class AbPopup : public geode::Popup<LevelEditorLayer*, EditorUI*> {
+class AbPopup : public geode::Popup {
 protected:
     Ref<LevelEditorLayer> m_lel;
     Ref<EditorUI> m_ui;
     TextInput* m_input = nullptr;
     CCLabelBMFont* m_status = nullptr;
 
-    bool setup(LevelEditorLayer* lel, EditorUI* ui) override {
+    bool init(LevelEditorLayer* lel, EditorUI* ui) {
+        if (!Popup::init(380.f, 220.f)) return false;
         m_lel = lel;
         m_ui = ui;
         this->setTitle("Autobuildersai");
@@ -125,7 +135,7 @@ protected:
         auto mem = loadMemory(mkey);
 
         matjson::Value messages = matjson::Value::array();
-        for (auto& v : mem.asArray().unwrapOr(std::vector<matjson::Value>{})) messages.push(v);
+        for (auto const& v : toVec(mem)) messages.push(v);
         matjson::Value cur;
         cur["role"] = "user";
         cur["content"] = fmt::format("Selected objects:\n{}\n\nPrompt: {}", selection, prompt);
@@ -137,7 +147,7 @@ protected:
         body["system"] = SYSTEM;
         body["messages"] = messages;
 
-        auto req = web::WebRequest();
+        web::WebRequest req;
         req.header("x-api-key", key);
         req.header("anthropic-version", "2023-06-01");
         req.header("content-type", "application/json");
@@ -145,44 +155,42 @@ protected:
 
         m_status->setString("Thinking...");
 
-        static EventListener<web::WebTask>* listener = new EventListener<web::WebTask>();
         Ref<LevelEditorLayer> lel = m_lel;
-        WeakRef<AbPopup> self = this;
-        listener->bind([lel, self, mkey, prompt, cur](web::WebTask::Event* e) {
-            auto* res = e->getValue();
-            if (!res) return;
-            auto status = [self](std::string s) {
-                if (auto p = self.lock()) p->m_status->setString(s.c_str());
-                else Notification::create(s, NotificationIcon::Info)->show();
-            };
-            if (!res->ok()) {
-                status(fmt::format("API error {}", res->code()));
-                return;
-            }
-            auto json = res->json();
-            if (!json.isOk()) { status("Bad response."); return; }
-            auto text = (*json)["content"][0]["text"].asString().unwrapOr("");
-            auto objs = sanitize(stripFences(text), (size_t)Mod::get()->getSettingValue<int64_t>("max-objects"));
-            if (objs.empty()) { status("AI returned no objects."); return; }
-            auto* made = lel->createObjectsFromString(objs, false, true);
-            size_t n = made ? made->count() : 0;
+        Ref<AbPopup> self = this;
+        async::spawn(
+            [req = std::move(req)]() mutable -> arc::Future<web::WebResponse> {
+                co_return co_await req.post("https://api.anthropic.com/v1/messages");
+            },
+            [lel, self, mkey, prompt, cur](web::WebResponse res) {
+                auto status = [self](std::string s) { self->m_status->setString(s.c_str()); };
+                if (!res.ok()) {
+                    status(fmt::format("API error {}", res.code()));
+                    return;
+                }
+                auto json = res.json();
+                if (!json.isOk()) { status("Bad response."); return; }
+                auto text = (*json)["content"][0]["text"].asString().unwrapOr("");
+                auto objs = sanitize(stripFences(text), (size_t)Mod::get()->getSettingValue<int64_t>("max-objects"));
+                if (objs.empty()) { status("AI returned no objects."); return; }
+                auto* made = lel->createObjectsFromString(objs, false, true);
+                size_t n = made ? made->count() : 0;
 
-            auto mem = loadMemory(mkey);
-            mem.push(cur);
-            matjson::Value reply;
-            reply["role"] = "assistant";
-            reply["content"] = fmt::format("(added {} decor objects for: {})", n, prompt);
-            mem.push(reply);
-            saveMemory(mkey, mem);
-            status(fmt::format("Added {} objects. Undo works as usual.", n));
-        });
-        listener->setFilter(req.post("https://api.anthropic.com/v1/messages"));
+                auto mem2 = loadMemory(mkey);
+                mem2.push(cur);
+                matjson::Value reply;
+                reply["role"] = "assistant";
+                reply["content"] = fmt::format("(added {} decor objects for: {})", n, prompt);
+                mem2.push(reply);
+                saveMemory(mkey, mem2);
+                status(fmt::format("Added {} objects. Undo works as usual.", n));
+            }
+        );
     }
 
 public:
     static AbPopup* create(LevelEditorLayer* lel, EditorUI* ui) {
         auto ret = new AbPopup();
-        if (ret->initAnchored(380.f, 220.f, lel, ui)) {
+        if (ret->init(lel, ui)) {
             ret->autorelease();
             return ret;
         }
