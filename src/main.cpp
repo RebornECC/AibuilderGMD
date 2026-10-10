@@ -131,8 +131,11 @@ protected:
         if (prompt.empty()) { this->say("Type a prompt first."); return; }
         auto provider = Mod::get()->getSettingValue<std::string>("provider");
         bool gemini = provider == "gemini";
-        bool deepseek = provider == "deepseek";
-        auto key = Mod::get()->getSettingValue<std::string>(gemini ? "gemini-key" : deepseek ? "deepseek-key" : "api-key");
+        bool openrouter = provider == "openrouter";
+        bool deepseek = provider == "deepseek" || openrouter; // both use the OpenAI-style chat format
+        auto key = Mod::get()->getSettingValue<std::string>(
+            gemini ? "gemini-key" : openrouter ? "openrouter-key" : deepseek ? "deepseek-key" : "api-key"
+        );
         if (key.empty()) { this->say("Set the API key for the chosen provider in the mod settings."); return; }
 
         auto* sel = m_ui->getSelectedObjects();
@@ -189,12 +192,13 @@ protected:
             messages.push(sysMsg);
             for (auto const& v : toVec(mem)) messages.push(v);
             messages.push(cur);
-            body["model"] = Mod::get()->getSettingValue<std::string>("deepseek-model");
+            body["model"] = Mod::get()->getSettingValue<std::string>(openrouter ? "openrouter-model" : "deepseek-model");
             body["max_tokens"] = 8000;
             body["stream"] = false;
             body["messages"] = messages;
-            url = "https://api.deepseek.com/chat/completions";
+            url = openrouter ? "https://openrouter.ai/api/v1/chat/completions" : "https://api.deepseek.com/chat/completions";
             req.header("Authorization", "Bearer " + key);
+            if (openrouter) req.header("X-Title", "Autobuildersai");
         } else {
             matjson::Value messages = matjson::Value::array();
             for (auto const& v : toVec(mem)) messages.push(v);
