@@ -1,43 +1,76 @@
 {
-	"geode": "5.11.1",
-	"gd": {
-		"win": "*",
-		"android": "*",
-		"mac": "*",
-		"ios": "*"
-	},
-	"id": "rebornecc.autobuildersai",
-	"name": "Autobuildersai",
-	"version": "v0.1.0",
-	"developer": "RebornECC",
-	"description": "Select objects in the editor, type a prompt, and an AI decorates them. The AI keeps a separate memory for every level.",
-	"settings": {
-		"api-key": {
-			"type": "string",
-			"name": "Anthropic API key",
-			"description": "Your Anthropic API key (sk-ant-...). Stored only on this device.",
-			"default": ""
-		},
-		"model": {
-			"type": "string",
-			"name": "Model",
-			"description": "Model id sent to the API.",
-			"default": "claude-sonnet-4-5"
-		},
-		"memory-turns": {
-			"type": "int",
-			"name": "Memory size (turns)",
-			"description": "How many past prompts the AI remembers for each level.",
-			"default": 8,
-			"min": 0,
-			"max": 30
-		},
-		"max-objects": {
-			"type": "int",
-			"name": "Max objects per generation",
-			"default": 200,
-			"min": 10,
-			"max": 1000
-		}
-	}
+ "geode": "5.11.1",
+ "gd": {
+  "win": "*",
+  "android": "*",
+  "mac": "*",
+  "ios": "*"
+ },
+ "id": "rebornecc.autobuildersai",
+ "name": "Autobuildersai",
+ "version": "v0.1.0",
+ "developer": "RebornECC",
+ "description": "Select objects in the editor, type a prompt, and an AI decorates them. The AI keeps a separate memory for every level.",
+ "settings": {
+  "provider": {
+   "type": "string",
+   "name": "AI provider",
+   "description": "deepseek = DeepSeek (very cheap). gemini = Google Gemini (free tier). claude = Anthropic (paid).",
+   "default": "deepseek",
+   "one-of": [
+    "deepseek",
+    "gemini",
+    "claude"
+   ]
+  },
+  "deepseek-key": {
+   "type": "string",
+   "name": "DeepSeek API key",
+   "description": "Key from platform.deepseek.com",
+   "default": ""
+  },
+  "deepseek-model": {
+   "type": "string",
+   "name": "DeepSeek model",
+   "default": "deepseek-chat"
+  },
+  "gemini-key": {
+   "type": "string",
+   "name": "Gemini API key",
+   "description": "Free key from Google AI Studio (aistudio.google.com).",
+   "default": ""
+  },
+  "gemini-model": {
+   "type": "string",
+   "name": "Gemini model",
+   "default": "gemini-2.5-flash"
+  },
+  "api-key": {
+   "type": "string",
+   "name": "Anthropic API key",
+   "description": "Your Anthropic API key (sk-ant-...). Stored only on this device.",
+   "default": ""
+  },
+  "model": {
+   "type": "string",
+   "name": "Model",
+   "description": "Model id sent to the API.",
+   "default": "claude-sonnet-4-5"
+  },
+  "memory-turns": {
+   "type": "int",
+   "name": "Memory size (turns)",
+   "description": "How many past prompts the AI remembers for each level.",
+   "default": 8,
+   "min": 0,
+   "max": 30
+  },
+  "max-objects": {
+   "type": "int",
+   "name": "Max objects per generation",
+   "default": 200,
+   "min": 10,
+   "max": 1000
+  }
+ }
 }
