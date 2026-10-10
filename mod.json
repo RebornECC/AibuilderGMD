@@ -15,7 +15,7 @@
   "provider": {
    "type": "string",
    "name": "AI provider",
-   "description": "openrouter = OpenRouter (default model google/gemini-2.5-flash). deepseek, gemini, claude = direct APIs.",
+   "description": "openrouter = OpenRouter (default model deepseek/deepseek-chat). deepseek, gemini, claude = direct APIs.",
    "default": "openrouter",
    "one-of": [
     "openrouter",
@@ -34,7 +34,7 @@
    "type": "string",
    "name": "OpenRouter model",
    "description": "Model slug from openrouter.ai/models",
-   "default": "google/gemini-2.5-flash"
+   "default": "deepseek/deepseek-chat"
   },
   "deepseek-key": {
    "type": "string",
