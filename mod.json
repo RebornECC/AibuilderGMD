@@ -15,13 +15,26 @@
   "provider": {
    "type": "string",
    "name": "AI provider",
-   "description": "deepseek = DeepSeek (very cheap). gemini = Google Gemini (free tier). claude = Anthropic (paid).",
-   "default": "deepseek",
+   "description": "openrouter = OpenRouter (default model google/gemini-2.5-flash). deepseek, gemini, claude = direct APIs.",
+   "default": "openrouter",
    "one-of": [
+    "openrouter",
     "deepseek",
     "gemini",
     "claude"
    ]
+  },
+  "openrouter-key": {
+   "type": "string",
+   "name": "OpenRouter API key",
+   "description": "Key from openrouter.ai/keys (starts with sk-or-).",
+   "default": ""
+  },
+  "openrouter-model": {
+   "type": "string",
+   "name": "OpenRouter model",
+   "description": "Model slug from openrouter.ai/models",
+   "default": "google/gemini-2.5-flash"
   },
   "deepseek-key": {
    "type": "string",
