@@ -3,6 +3,7 @@
 #include <Geode/Geode.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <Geode/modify/EditorUI.hpp>
 #include <Geode/utils/web.hpp>
 #include <Geode/utils/async.hpp>
@@ -47,12 +48,22 @@ namespace {
         return s.substr(i);
     }
 
-    // GD text fields can't type '-', so the user may omit the fixed prefix and the mod adds it.
+    // GD text fields can't type '-', so dashes are dropped and the fixed prefix is re-added here.
+    // Works whether the user enters the whole key without dashes or only the part after the prefix.
     std::string normKey(std::string const& provider, std::string key) {
         key = trim(key);
         if (key.empty()) return key;
-        if (provider == "openrouter" && key.rfind("sk-or-", 0) != 0) return "sk-or-v1-" + key;
-        if (provider == "deepseek" && key.rfind("sk-", 0) != 0) return "sk-" + key;
+        if (provider == "openrouter" || provider == "deepseek") {
+            std::string k;
+            for (char c : key) if (std::isalnum((unsigned char)c)) k += c;
+            if (provider == "openrouter") {
+                if (k.rfind("skorv1", 0) == 0) k = k.substr(6);
+                else if (k.rfind("skor", 0) == 0) k = k.substr(4);
+                return "sk-or-v1-" + k;
+            }
+            if (k.rfind("sk", 0) == 0) k = k.substr(2);
+            return "sk-" + k;
+        }
         return key;
     }
 
@@ -68,18 +79,36 @@ namespace {
         return out;
     }
 
-    // keep only characters that can appear in a GD object string
-    std::string sanitize(std::string s, size_t maxObjects) {
-        std::string out;
-        size_t objects = 0;
-        for (char c : s) {
-            if (c == ';') {
-                if (++objects > maxObjects) break;
-                out += c;
-            } else if ((c >= '0' && c <= '9') || c == ',' || c == '.' || c == '-' || c == '_' || c == '|' || c == '=') {
-                out += c;
-            }
+    // Accept only tokens that really look like GD objects: "key,value,key,value,..." starting with an object id.
+    // Anything else in the AI reply (explanations, numbers in prose) is thrown away instead of corrupting objects.
+    bool validObject(std::string const& t) {
+        if (t.size() < 7 || t.size() > 2000) return false;
+        size_t commas = 0;
+        for (char c : t) {
+            if (c == ',') commas++;
+            else if (!((c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_' || c == '|' || c == 'e' || c == 'E' || c == '+')) return false;
         }
+        if (commas % 2 == 0) return false; // odd number of commas = even number of fields
+        if (t.rfind("1,", 0) != 0) return false;
+        return true;
+    }
+
+    std::string sanitize(std::string const& text, size_t maxObjects) {
+        std::string out, tok;
+        size_t objects = 0;
+        auto flush = [&]() {
+            auto t = trim(tok);
+            tok.clear();
+            if (objects < maxObjects && validObject(t)) {
+                out += t + ";";
+                objects++;
+            }
+        };
+        for (char c : text) {
+            if (c == ';' || c == '\n' || c == '\r') flush();
+            else tok += c;
+        }
+        flush();
         return out;
     }
 
@@ -95,11 +124,16 @@ Respect the style and the earlier requests remembered for this level.)";
 }
 
 class AbPopup : public geode::Popup {
+public:
+    static inline int s_open = 0;
+    AbPopup() { s_open++; }
+    ~AbPopup() override { s_open--; }
 protected:
     Ref<LevelEditorLayer> m_lel;
     Ref<EditorUI> m_ui;
     TextInput* m_input = nullptr;
     CCLabelBMFont* m_status = nullptr;
+    bool m_busy = false;
 
     void say(std::string const& text) {
         m_status->setString(text.c_str());
@@ -117,6 +151,8 @@ protected:
         auto size = m_mainLayer->getContentSize();
 
         m_input = TextInput::create(size.width - 40.f, "Describe the decor...", "chatFont.fnt");
+        m_input->setCommonFilter(CommonFilter::Any);
+        m_input->setMaxCharCount(300);
         m_input->setPosition({size.width / 2, size.height - 80.f});
         m_mainLayer->addChild(m_input);
 
@@ -146,6 +182,7 @@ protected:
 
     void generate() {
         auto prompt = std::string(m_input->getString());
+        if (m_busy) { this->say("Still working, wait for the answer."); return; }
         if (prompt.empty()) { this->say("Type a prompt first."); return; }
         auto provider = Mod::get()->getSettingValue<std::string>("provider");
         bool gemini = provider == "gemini";
@@ -172,6 +209,10 @@ protected:
         matjson::Value cur;
         cur["role"] = "user";
         cur["content"] = fmt::format("Selected objects:\n{}\n\nPrompt: {}", selection, prompt);
+
+        matjson::Value memCur; // compact version stored in memory (not the whole selection)
+        memCur["role"] = "user";
+        memCur["content"] = fmt::format("(selected {} objects) Prompt: {}", sel->count(), prompt);
 
         matjson::Value body;
         std::string url;
@@ -212,7 +253,7 @@ protected:
             for (auto const& v : toVec(mem)) messages.push(v);
             messages.push(cur);
             body["model"] = Mod::get()->getSettingValue<std::string>(openrouter ? "openrouter-model" : "deepseek-model");
-            body["max_tokens"] = 8000;
+            body["max_tokens"] = Mod::get()->getSettingValue<int64_t>("max-tokens");
             body["stream"] = false;
             body["messages"] = messages;
             url = openrouter ? "https://openrouter.ai/api/v1/chat/completions" : "https://api.deepseek.com/chat/completions";
@@ -223,7 +264,7 @@ protected:
             for (auto const& v : toVec(mem)) messages.push(v);
             messages.push(cur);
             body["model"] = Mod::get()->getSettingValue<std::string>("model");
-            body["max_tokens"] = 8000;
+            body["max_tokens"] = Mod::get()->getSettingValue<int64_t>("max-tokens");
             body["system"] = SYSTEM;
             body["messages"] = messages;
             url = "https://api.anthropic.com/v1/messages";
@@ -233,6 +274,7 @@ protected:
         req.header("content-type", "application/json");
         req.bodyJSON(body);
 
+        m_busy = true;
         this->say("Thinking...");
 
         Ref<LevelEditorLayer> lel = m_lel;
@@ -241,10 +283,15 @@ protected:
             [req = std::move(req), url]() mutable -> arc::Future<web::WebResponse> {
                 co_return co_await req.post(url);
             },
-            [lel, self, mkey, prompt, cur, gemini, deepseek](web::WebResponse res) {
+            [lel, self, mkey, prompt, memCur, gemini, deepseek](web::WebResponse res) {
+                self->m_busy = false;
                 auto status = [self](std::string s) { self->say(s); };
                 if (!res.ok()) {
-                    status(fmt::format("API error {}", res.code()));
+                    int code = res.code();
+                    if (code == 401 || code == 403) status(fmt::format("Error {}: the key is wrong or not accepted. Check it in the mod settings.", code));
+                    else if (code == 402) status("Error 402: no balance/credits on this key.");
+                    else if (code == 429) status("Error 429: too many requests, wait a bit.");
+                    else status(fmt::format("API error {}", code));
                     return;
                 }
                 auto json = res.json();
@@ -254,19 +301,22 @@ protected:
                     : deepseek
                     ? (*json)["choices"][0]["message"]["content"].asString().unwrapOr("")
                     : (*json)["content"][0]["text"].asString().unwrapOr("");
-                auto objs = sanitize(stripFences(text), (size_t)Mod::get()->getSettingValue<int64_t>("max-objects"));
-                if (objs.empty()) { status("AI returned no objects."); return; }
+                auto objs = sanitize(text, (size_t)Mod::get()->getSettingValue<int64_t>("max-objects"));
+                if (objs.empty()) {
+                    status(text.empty() ? "AI returned nothing (empty or blocked answer)." : "AI answer had no valid objects. Try again.");
+                    return;
+                }
                 auto* made = lel->createObjectsFromString(objs, false, true);
                 size_t n = made ? made->count() : 0;
 
                 auto mem2 = loadMemory(mkey);
-                mem2.push(cur);
+                mem2.push(memCur);
                 matjson::Value reply;
                 reply["role"] = "assistant";
                 reply["content"] = fmt::format("(added {} decor objects for: {})", n, prompt);
                 mem2.push(reply);
                 saveMemory(mkey, mem2);
-                status(fmt::format("Added {} objects. Undo works as usual.", n));
+                status(fmt::format("Added {} objects.", n));
             }
         );
     }
@@ -316,7 +366,7 @@ protected:
 
 public:
     bool ccTouchBegan(CCTouch* t, CCEvent*) override {
-        if (!this->isVisible() || !hit(t)) return false;
+        if (AbPopup::s_open > 0 || !this->isVisible() || !hit(t)) return false;
         m_active = true;
         m_moved = false;
         m_start = t->getLocation();
@@ -343,7 +393,7 @@ public:
             Mod::get()->setSavedValue<double>("btn-x", p.x);
             Mod::get()->setSavedValue<double>("btn-y", p.y);
         } else {
-            AbPopup::create(m_lel, m_ui)->show();
+            if (auto p = AbPopup::create(m_lel, m_ui)) p->show();
         }
     }
     void ccTouchCancelled(CCTouch*, CCEvent*) override { m_active = false; }
