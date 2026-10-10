@@ -84,6 +84,14 @@
    "default": 200,
    "min": 10,
    "max": 1000
+  },
+  "max-tokens": {
+   "type": "int",
+   "name": "Max answer tokens",
+   "description": "Lower this if your provider says you cannot afford the request (e.g. OpenRouter 402).",
+   "default": 4000,
+   "min": 256,
+   "max": 16000
   }
  }
 }
