@@ -27,7 +27,7 @@
   "openrouter-key": {
    "type": "string",
    "name": "OpenRouter API key",
-   "description": "Key from openrouter.ai/keys (starts with sk-or-).",
+   "description": "GD can't type '-'. Enter only the part AFTER sk-or-v1- (the mod adds the prefix).",
    "default": ""
   },
   "openrouter-model": {
@@ -39,7 +39,7 @@
   "deepseek-key": {
    "type": "string",
    "name": "DeepSeek API key",
-   "description": "Key from platform.deepseek.com",
+   "description": "GD can't type '-'. Enter only the part AFTER sk- (the mod adds the prefix).",
    "default": ""
   },
   "deepseek-model": {
