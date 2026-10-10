@@ -1,6 +1,8 @@
 // Autobuildersai - select objects in the GD editor, type a prompt, an AI decorates them.
 // Each level has its own memory (saved per level name + id).
 #include <Geode/Geode.hpp>
+#include <algorithm>
+#include <cmath>
 #include <Geode/modify/EditorUI.hpp>
 #include <Geode/utils/web.hpp>
 #include <Geode/utils/async.hpp>
@@ -36,6 +38,22 @@ namespace {
         matjson::Value out = matjson::Value::array();
         for (auto& v : arr) out.push(v);
         Mod::get()->setSavedValue<std::string>(key, out.dump(matjson::NO_INDENTATION));
+    }
+
+    std::string trim(std::string s) {
+        while (!s.empty() && (s.back() == ' ' || s.back() == '\n' || s.back() == '\r' || s.back() == '\t')) s.pop_back();
+        size_t i = 0;
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\n' || s[i] == '\r' || s[i] == '\t')) i++;
+        return s.substr(i);
+    }
+
+    // GD text fields can't type '-', so the user may omit the fixed prefix and the mod adds it.
+    std::string normKey(std::string const& provider, std::string key) {
+        key = trim(key);
+        if (key.empty()) return key;
+        if (provider == "openrouter" && key.rfind("sk-or-", 0) != 0) return "sk-or-v1-" + key;
+        if (provider == "deepseek" && key.rfind("sk-", 0) != 0) return "sk-" + key;
+        return key;
     }
 
     std::string stripFences(std::string s) {
@@ -136,6 +154,7 @@ protected:
         auto key = Mod::get()->getSettingValue<std::string>(
             gemini ? "gemini-key" : openrouter ? "openrouter-key" : deepseek ? "deepseek-key" : "api-key"
         );
+        key = normKey(provider, key);
         if (key.empty()) { this->say("Set the API key for the chosen provider in the mod settings."); return; }
 
         auto* sel = m_ui->getSelectedObjects();
@@ -264,19 +283,94 @@ public:
     }
 };
 
+class AbDragButton : public CCLayer {
+protected:
+    LevelEditorLayer* m_lel = nullptr;
+    EditorUI* m_ui = nullptr;
+    CCNode* m_visual = nullptr;
+    CCPoint m_start, m_origin;
+    bool m_active = false, m_moved = false;
+
+    bool init(LevelEditorLayer* lel, EditorUI* ui) {
+        if (!CCLayer::init()) return false;
+        m_lel = lel;
+        m_ui = ui;
+        auto spr = ButtonSprite::create("AI", "bigFont.fnt", "GJ_button_04.png", .6f);
+        spr->setPosition({0, 0});
+        this->addChild(spr);
+        m_visual = spr;
+        this->setTouchEnabled(true);
+        return true;
+    }
+
+    void registerWithTouchDispatcher() override {
+        CCDirector::get()->getTouchDispatcher()->addTargetedDelegate(this, -600, true);
+    }
+
+    bool hit(CCTouch* t) {
+        auto p = this->convertToNodeSpace(t->getLocation());
+        auto r = m_visual->boundingBox();
+        r.origin.x -= 8; r.origin.y -= 8; r.size.width += 16; r.size.height += 16;
+        return r.containsPoint(p);
+    }
+
+public:
+    bool ccTouchBegan(CCTouch* t, CCEvent*) override {
+        if (!this->isVisible() || !hit(t)) return false;
+        m_active = true;
+        m_moved = false;
+        m_start = t->getLocation();
+        m_origin = this->getPosition();
+        return true;
+    }
+    void ccTouchMoved(CCTouch* t, CCEvent*) override {
+        if (!m_active) return;
+        auto cur = t->getLocation();
+        auto d = cur - m_start;
+        if (!m_moved && (std::abs(d.x) > 10.f || std::abs(d.y) > 10.f)) m_moved = true;
+        if (m_moved) {
+            auto win = CCDirector::get()->getWinSize();
+            float x = std::clamp(m_origin.x + d.x, 20.f, win.width - 20.f);
+            float y = std::clamp(m_origin.y + d.y, 20.f, win.height - 20.f);
+            this->setPosition({x, y});
+        }
+    }
+    void ccTouchEnded(CCTouch*, CCEvent*) override {
+        if (!m_active) return;
+        m_active = false;
+        if (m_moved) {
+            auto p = this->getPosition();
+            Mod::get()->setSavedValue<double>("btn-x", p.x);
+            Mod::get()->setSavedValue<double>("btn-y", p.y);
+        } else {
+            AbPopup::create(m_lel, m_ui)->show();
+        }
+    }
+    void ccTouchCancelled(CCTouch*, CCEvent*) override { m_active = false; }
+
+    static AbDragButton* create(LevelEditorLayer* lel, EditorUI* ui) {
+        auto ret = new AbDragButton();
+        if (ret->init(lel, ui)) {
+            ret->autorelease();
+            return ret;
+        }
+        delete ret;
+        return nullptr;
+    }
+};
+
 class $modify(AbEditorUI, EditorUI) {
     bool init(LevelEditorLayer* lel) {
         if (!EditorUI::init(lel)) return false;
-        auto menu = CCMenu::create();
-        menu->setID("autobuildersai-menu"_spr);
-        auto spr = ButtonSprite::create("AI", "bigFont.fnt", "GJ_button_04.png", .6f);
-        auto btn = CCMenuItemExt::createSpriteExtra(spr, [this, lel](auto) {
-            AbPopup::create(lel, this)->show();
-        });
-        menu->addChild(btn);
+        auto btn = AbDragButton::create(lel, this);
+        btn->setID("autobuildersai-button"_spr);
         auto win = CCDirector::get()->getWinSize();
-        menu->setPosition({win.width - 30.f, win.height - 60.f});
-        this->addChild(menu, 100);
+        float x = (float)Mod::get()->getSavedValue<double>("btn-x", win.width - 40.0);
+        float y = (float)Mod::get()->getSavedValue<double>("btn-y", win.height - 60.0);
+        x = std::clamp(x, 20.f, win.width - 20.f);
+        y = std::clamp(y, 20.f, win.height - 20.f);
+        btn->setPosition({x, y});
+        this->addChild(btn, 100);
         return true;
     }
 };
