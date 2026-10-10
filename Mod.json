@@ -1,0 +1,43 @@
+{
+	"geode": "4.9.0",
+	"gd": {
+		"win": "2.2074",
+		"android": "2.2074",
+		"mac": "2.2074",
+		"ios": "2.2074"
+	},
+	"id": "rebornecc.autobuildersai",
+	"name": "Autobuildersai",
+	"version": "v0.1.0",
+	"developer": "RebornECC",
+	"description": "Select objects in the editor, type a prompt, and an AI decorates them. The AI keeps a separate memory for every level.",
+	"settings": {
+		"api-key": {
+			"type": "string",
+			"name": "Anthropic API key",
+			"description": "Your Anthropic API key (sk-ant-...). Stored only on this device.",
+			"default": ""
+		},
+		"model": {
+			"type": "string",
+			"name": "Model",
+			"description": "Model id sent to the API.",
+			"default": "claude-sonnet-4-5"
+		},
+		"memory-turns": {
+			"type": "int",
+			"name": "Memory size (turns)",
+			"description": "How many past prompts the AI remembers for each level.",
+			"default": 8,
+			"min": 0,
+			"max": 30
+		},
+		"max-objects": {
+			"type": "int",
+			"name": "Max objects per generation",
+			"default": 200,
+			"min": 10,
+			"max": 1000
+		}
+	}
+}
