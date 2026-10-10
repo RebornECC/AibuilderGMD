@@ -83,47 +83,60 @@ protected:
     TextInput* m_input = nullptr;
     CCLabelBMFont* m_status = nullptr;
 
+    void say(std::string const& text) {
+        m_status->setString(text.c_str());
+        m_status->setScale(.55f);
+        float maxW = m_mainLayer->getContentSize().width - 30.f;
+        float w = m_status->getContentSize().width * m_status->getScale();
+        if (w > maxW) m_status->setScale(.55f * maxW / w);
+    }
+
     bool init(LevelEditorLayer* lel, EditorUI* ui) {
-        if (!Popup::init(380.f, 220.f)) return false;
+        if (!Popup::init(440.f, 240.f)) return false;
         m_lel = lel;
         m_ui = ui;
         this->setTitle("Autobuildersai");
         auto size = m_mainLayer->getContentSize();
 
-        m_input = TextInput::create(size.width - 40.f, "Describe the decor (e.g. neon city, dark forest)...", "chatFont.fnt");
-        m_input->setPosition({size.width / 2, size.height - 70.f});
+        m_input = TextInput::create(size.width - 40.f, "Describe the decor...", "chatFont.fnt");
+        m_input->setPosition({size.width / 2, size.height - 80.f});
         m_mainLayer->addChild(m_input);
 
         m_status = CCLabelBMFont::create("Select objects, then press Generate.", "chatFont.fnt");
-        m_status->setScale(.6f);
-        m_status->setPosition({size.width / 2, size.height / 2 - 5.f});
+                m_status->setPosition({size.width / 2, 95.f});
         m_mainLayer->addChild(m_status);
+        this->say("Select objects, then press Generate.");
 
         auto menu = CCMenu::create();
         menu->setPosition({0, 0});
         m_mainLayer->addChild(menu);
 
         auto gen = CCMenuItemExt::createSpriteExtra(ButtonSprite::create("Generate"), [this](auto) { this->generate(); });
-        gen->setPosition({size.width / 2 - 70.f, 40.f});
+        gen->setScale(.75f);
+        gen->setPosition({size.width / 2 - 100.f, 40.f});
         menu->addChild(gen);
 
         auto clr = CCMenuItemExt::createSpriteExtra(ButtonSprite::create("Clear memory"), [this](auto) {
             Mod::get()->setSavedValue<std::string>(memKey(m_lel), "[]");
-            m_status->setString("Memory of this level cleared.");
+            this->say("Memory of this level cleared.");
         });
-        clr->setPosition({size.width / 2 + 70.f, 40.f});
+        clr->setScale(.75f);
+        clr->setPosition({size.width / 2 + 100.f, 40.f});
         menu->addChild(clr);
         return true;
     }
 
     void generate() {
         auto prompt = std::string(m_input->getString());
-        if (prompt.empty()) { m_status->setString("Type a prompt first."); return; }
-        auto key = Mod::get()->getSettingValue<std::string>("api-key");
-        if (key.empty()) { m_status->setString("Set your API key in the mod settings."); return; }
+        if (prompt.empty()) { this->say("Type a prompt first."); return; }
+        auto provider = Mod::get()->getSettingValue<std::string>("provider");
+        bool gemini = provider == "gemini";
+        bool deepseek = provider == "deepseek";
+        auto key = Mod::get()->getSettingValue<std::string>(gemini ? "gemini-key" : deepseek ? "deepseek-key" : "api-key");
+        if (key.empty()) { this->say("Set the API key for the chosen provider in the mod settings."); return; }
 
         auto* sel = m_ui->getSelectedObjects();
-        if (!sel || sel->count() == 0) { m_status->setString("Select objects first."); return; }
+        if (!sel || sel->count() == 0) { this->say("Select objects first."); return; }
 
         std::string selection;
         for (auto* o : CCArrayExt<GameObject*>(sel)) {
@@ -134,42 +147,90 @@ protected:
         auto mkey = memKey(m_lel);
         auto mem = loadMemory(mkey);
 
-        matjson::Value messages = matjson::Value::array();
-        for (auto const& v : toVec(mem)) messages.push(v);
         matjson::Value cur;
         cur["role"] = "user";
         cur["content"] = fmt::format("Selected objects:\n{}\n\nPrompt: {}", selection, prompt);
-        messages.push(cur);
 
         matjson::Value body;
-        body["model"] = Mod::get()->getSettingValue<std::string>("model");
-        body["max_tokens"] = 8000;
-        body["system"] = SYSTEM;
-        body["messages"] = messages;
-
+        std::string url;
         web::WebRequest req;
-        req.header("x-api-key", key);
-        req.header("anthropic-version", "2023-06-01");
+        if (gemini) {
+            matjson::Value contents = matjson::Value::array();
+            auto addTurn = [&](matjson::Value const& m) {
+                matjson::Value part;
+                part["text"] = m["content"].asString().unwrapOr("");
+                matjson::Value parts = matjson::Value::array();
+                parts.push(part);
+                matjson::Value c;
+                c["role"] = m["role"].asString().unwrapOr("user") == "assistant" ? "model" : "user";
+                c["parts"] = parts;
+                contents.push(c);
+            };
+            for (auto const& v : toVec(mem)) addTurn(v);
+            addTurn(cur);
+            matjson::Value sysPart;
+            sysPart["text"] = SYSTEM;
+            matjson::Value sysParts = matjson::Value::array();
+            sysParts.push(sysPart);
+            matjson::Value sysInstr;
+            sysInstr["parts"] = sysParts;
+            body["systemInstruction"] = sysInstr;
+            body["contents"] = contents;
+            url = fmt::format(
+                "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+                Mod::get()->getSettingValue<std::string>("gemini-model")
+            );
+            req.header("x-goog-api-key", key);
+        } else if (deepseek) {
+            matjson::Value messages = matjson::Value::array();
+            matjson::Value sysMsg;
+            sysMsg["role"] = "system";
+            sysMsg["content"] = SYSTEM;
+            messages.push(sysMsg);
+            for (auto const& v : toVec(mem)) messages.push(v);
+            messages.push(cur);
+            body["model"] = Mod::get()->getSettingValue<std::string>("deepseek-model");
+            body["max_tokens"] = 8000;
+            body["stream"] = false;
+            body["messages"] = messages;
+            url = "https://api.deepseek.com/chat/completions";
+            req.header("Authorization", "Bearer " + key);
+        } else {
+            matjson::Value messages = matjson::Value::array();
+            for (auto const& v : toVec(mem)) messages.push(v);
+            messages.push(cur);
+            body["model"] = Mod::get()->getSettingValue<std::string>("model");
+            body["max_tokens"] = 8000;
+            body["system"] = SYSTEM;
+            body["messages"] = messages;
+            url = "https://api.anthropic.com/v1/messages";
+            req.header("x-api-key", key);
+            req.header("anthropic-version", "2023-06-01");
+        }
         req.header("content-type", "application/json");
         req.bodyJSON(body);
 
-        m_status->setString("Thinking...");
+        this->say("Thinking...");
 
         Ref<LevelEditorLayer> lel = m_lel;
         Ref<AbPopup> self = this;
         async::spawn(
-            [req = std::move(req)]() mutable -> arc::Future<web::WebResponse> {
-                co_return co_await req.post("https://api.anthropic.com/v1/messages");
+            [req = std::move(req), url]() mutable -> arc::Future<web::WebResponse> {
+                co_return co_await req.post(url);
             },
-            [lel, self, mkey, prompt, cur](web::WebResponse res) {
-                auto status = [self](std::string s) { self->m_status->setString(s.c_str()); };
+            [lel, self, mkey, prompt, cur, gemini, deepseek](web::WebResponse res) {
+                auto status = [self](std::string s) { self->say(s); };
                 if (!res.ok()) {
                     status(fmt::format("API error {}", res.code()));
                     return;
                 }
                 auto json = res.json();
                 if (!json.isOk()) { status("Bad response."); return; }
-                auto text = (*json)["content"][0]["text"].asString().unwrapOr("");
+                std::string text = gemini
+                    ? (*json)["candidates"][0]["content"]["parts"][0]["text"].asString().unwrapOr("")
+                    : deepseek
+                    ? (*json)["choices"][0]["message"]["content"].asString().unwrapOr("")
+                    : (*json)["content"][0]["text"].asString().unwrapOr("");
                 auto objs = sanitize(stripFences(text), (size_t)Mod::get()->getSettingValue<int64_t>("max-objects"));
                 if (objs.empty()) { status("AI returned no objects."); return; }
                 auto* made = lel->createObjectsFromString(objs, false, true);
